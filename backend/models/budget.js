@@ -67,7 +67,8 @@ class Budget {
             const result = await pool.query(
                 `UPDATE budgets
                  SET initial_income = $1,
-                     total_income = total_income - initial_income + $1
+                     total_income = COALESCE(total_income, 0) - COALESCE(initial_income, 0) + $1::numeric,
+                     balance = COALESCE(total_income, 0) - COALESCE(initial_income, 0) + $1::numeric - COALESCE(total_expenses, 0)
                  WHERE user_id = $2
                  RETURNING *`,
                 [newAmount, userId]
@@ -297,6 +298,132 @@ class Budget {
             throw error;
         }
     }
+    static async updateExpense(userId, expenseId, expenseData) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            
+            // Actualizar el gasto
+            const expenseResult = await client.query(
+                `UPDATE expenses SET amount = $1, description = $2, category = $3
+                 WHERE id = $4 AND user_id = $5 RETURNING *`,
+                [expenseData.amount, expenseData.description, expenseData.category, expenseId, userId]
+            );
+
+            // Actualizar el presupuesto
+            const budgetResult = await client.query(
+                `UPDATE budgets
+                 SET total_expenses = (SELECT SUM(amount) FROM expenses WHERE user_id = $1),
+                     balance = total_income - (SELECT SUM(amount) FROM expenses WHERE user_id = $1)
+                 WHERE user_id = $1 RETURNING *`,
+                [userId]
+            );
+
+            await client.query('COMMIT');
+            return {
+                updatedExpense: expenseResult.rows[0],
+                updatedBudget: budgetResult.rows[0]
+            };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    static async deleteExpense(userId, expenseId) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            
+            // Eliminar el gasto
+            const expenseResult = await client.query(
+                `DELETE FROM expenses WHERE id = $1 AND user_id = $2 RETURNING *`,
+                [expenseId, userId]
+            );
+
+            // Actualizar el presupuesto
+            const budgetResult = await client.query(
+                `UPDATE budgets
+                 SET total_expenses = (SELECT SUM(amount) FROM expenses WHERE user_id = $1),
+                     balance = total_income - (SELECT SUM(amount) FROM expenses WHERE user_id = $1)
+                 WHERE user_id = $1 RETURNING *`,
+                [userId]
+            );
+
+            await client.query('COMMIT');
+            return {
+                deletedExpense: expenseResult.rows[0],
+                updatedBudget: budgetResult.rows[0]
+            };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    static async saveBudget(userId, budgetData) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            
+            // Insertar en la tabla saved_budgets
+            const result = await client.query(
+                `INSERT INTO saved_budgets (user_id, budget_data, created_at)
+                 VALUES ($1, $2, NOW()) RETURNING *`,
+                [userId, JSON.stringify(budgetData)]
+            );
+
+            await client.query('COMMIT');
+            return result.rows[0];
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    static async generateExcel(userId) {
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Presupuesto');
+
+        try {
+            // Obtener datos del presupuesto, gastos e ingresos extras
+            const budgetData = await this.getBudgetByUserId(userId);
+            const expenses = await this.getExpensesByUserId(userId);
+            const extraIncomes = await this.getExtraIncomesByUserId(userId);
+
+            // Añadir datos al worksheet
+            worksheet.addRow(['Presupuesto']);
+            worksheet.addRow(['Ingresos Totales', budgetData.total_income]);
+            worksheet.addRow(['Gastos Totales', budgetData.total_expenses]);
+            worksheet.addRow(['Balance', budgetData.balance]);
+
+            worksheet.addRow([]);
+            worksheet.addRow(['Gastos']);
+            worksheet.addRow(['Descripción', 'Monto', 'Categoría']);
+            expenses.forEach(expense => {
+                worksheet.addRow([expense.description, expense.amount, expense.category]);
+            });
+
+            worksheet.addRow([]);
+            worksheet.addRow(['Ingresos Extras']);
+            worksheet.addRow(['Descripción', 'Monto']);
+            extraIncomes.forEach(income => {
+                worksheet.addRow([income.description, income.amount]);
+            });
+
+            return await workbook.xlsx.writeBuffer();
+        } catch (error) {
+            console.error('Error generando el archivo Excel:', error);
+            throw error;
+        }
+    }
+
 }
 
 module.exports = Budget;

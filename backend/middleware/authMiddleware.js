@@ -2,17 +2,13 @@ const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const authMiddleware = (req, res, next) => {
-    console.log('Headers recibidos:', req.headers);
-    const token = req.header('Authorization')?.replace('Bearer ', '');
-    console.log('Token extraído:', token);
-
+    const token = req.header('Authorization')?.split(' ')[1];
     if (!token) {
         return res.status(401).json({ message: 'Acceso denegado. No se proporcionó un token.' });
     }
 
     try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        console.log('Token decodificado:', decoded);
         req.user = decoded;
         next();
     } catch (error) {

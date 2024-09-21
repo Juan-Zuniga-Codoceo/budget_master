@@ -65,6 +65,7 @@ const morgan = require('morgan');
 const authRoutes = require('./routes/authRoutes');
 const budgetRoutes = require('./routes/budgetRoutes');
 const errorHandler = require('./middleware/errorHandler');
+const userRoutes = require('./routes/userRoutes'); 
 require('dotenv').config();
 
 const app = express();
@@ -87,6 +88,7 @@ app.use('/api', limiter);
 // Rutas
 app.use('/api/auth', authRoutes);
 app.use('/api/budget', budgetRoutes);
+app.use('/api/user', userRoutes); 
 
 // Ruta de prueba para verificar que el servidor está funcionando
 app.get('/', (req, res) => {
